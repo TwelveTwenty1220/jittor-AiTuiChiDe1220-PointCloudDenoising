@@ -1,0 +1,28 @@
+# 产物目录(数据采样 / 训练权重 / 推理结果 / 日志)一律不入库
+outputs/
+runs/
+out/
+out_a/
+out_b/
+data/**/*.npy
+*.log
+*.zip
+
+# 中间权重与数组文件; 两份最终权重(共 12MB)显式放行, 见 checkpoints/README.txt
+*.pkl
+*.pt
+*.ckpt
+*.npz
+*.npy
+!checkpoints/aboard_best_swa19_bnfix.pkl
+!checkpoints/bboard_best_bigswa26.pkl
+
+# Python / 编辑器 / 系统
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+.DS_Store
+.idea/
+.vscode/
+*.tmp.*

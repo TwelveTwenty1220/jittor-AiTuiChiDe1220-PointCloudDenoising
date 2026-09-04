@@ -1,0 +1,20 @@
+第三方引用与声明 (按官方《开源代码规范》第 9 条)
+
+1. 深度学习框架: Jittor (计图) 1.3.10, Apache-2.0, https://github.com/Jittor/jittor
+   本仓库训练与推理全链路仅依赖 Jittor + NumPy + SciPy + trimesh, 不含任何 PyTorch 依赖。
+
+2. 参考论文 (网络结构思路来源):
+   Mao, A. et al. "Denoising Point Clouds in Latent Space via Graph Convolution and
+   Invertible Neural Network" (PD-LTS), CVPR 2024.
+   本仓库以其"图卷积特征 + 可逆网络隐空间去噪"为参考架构, 由本团队用 Jittor 独立实现
+   (src/pdlts_jittor/), 权重全部随机初始化从零训练; 未加载、转换或使用该论文的任何开源权重,
+   未使用该论文提供的任何数据集。
+
+3. 竞赛基线: 第六届计图人工智能挑战赛赛道二官方 baseline (StraightPCF 风格, 由组委会提供)。
+   本仓库沿用其数据目录约定与 result.zip 提交格式, 模型/训练/推理代码为本团队自研。
+
+4. 数据: 仅使用组委会提供的官方 dataset_train / dataset_train_b / dataset_test_noisy(_b)。
+   训练用 npy 全部可由 tools/prepare_train_npy.py 从官方网格重建, 未使用任何外部数据。
+
+5. EMD 损失: 使用 SciPy linear_sum_assignment (匈牙利算法) 做精确匹配, 自行实现于
+   src/pdlts_jittor/train/emd_jt.py; 不依赖任何第三方 CUDA EMD 扩展。

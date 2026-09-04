@@ -1,0 +1,28 @@
+# B 榜最终提交所用权重与推理的完整配置记录。
+# 可执行入口是 scripts/10_bboard_train_arms.sh + src/pdlts_jittor/train/make_bigswa26.py + scripts/11_bboard_reproduce_best.sh。
+# 与 A 榜相比: 网络/损失/训练代码零修改; 仅用官方 B 榜训练集继续训练 + 推理超参重扫 (docs/BBOARD_CHANGES.md)。
+model: same_as: configs/aboard_final.yaml
+
+data:
+  source: official dataset_train_b (OBJ) -> tools/prepare_train_npy.py
+  heldout_list: official datalist/validate_b.txt (100 模型)
+  augment: [random_scale 0.8-1.2]   # --no_aug_rotate: 关闭旋转增广 (训练脚本原有开关)
+
+train:                              # 起点 = checkpoints/aboard_best_swa19_bnfix.pkl
+  common: {batch_size: 4, train_patch_size: 2048, emd_w: 0.05, w_cd: 40, w_rep: 40, r0: 0.05,
+           w_sink: 40, sink_iters: 30, sink_eps: 0.005, fp_grad_iters: 2, seed: 2023}
+  arm1_norot:   {resume: aboard_best_swa19_bnfix, epochs: 101-133, lr: 1.0e-4}
+  arm1b_anneal: {resume: norot-ep121,             epochs: 122-129, lr: 5.0e-5}
+  arm2_a2nd:    {resume: anneal-ep129,            epochs: 130-134, lr: 2.0e-5}
+  arm3_a2ndp:   {resume: swa(norot ep118-129),    epochs: 130-134, lr: 2.0e-5}
+
+swa:                                # src/pdlts_jittor/train/make_bigswa26.py
+  checkpoints: [norot ep118-133 (16), a2nd ep130-134 (5), a2ndp ep130-134 (5)]  # 26 点等权平均
+  output: checkpoints/bboard_best_bigswa26.pkl
+
+infer:                              # scripts/11_bboard_reproduce_best.sh
+  patch_size: 3072
+  seed_k: 12
+  niters: [2, 1]
+  output_blend: 0.3 * niters1 + 0.7 * niters2   # 逐点凸组合
+  jt_patch_step: 8

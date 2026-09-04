@@ -1,0 +1,54 @@
+# A 榜最终提交所用权重与推理的完整配置记录。
+# 可执行入口是 scripts/01~06 (本文件与脚本中的取值一一对应, 供审阅与对照; 脚本为准)。
+model:
+  name: HeavyDenoiseFlow            # src/pdlts_jittor/pdlts_model.py
+  feature_hidden: 64                # EdgeConv 隐层宽度
+  knn_k: 16
+  lipschitz: 0.98                   # 谱归一化 Lipschitz 系数
+  fp_grad_iters: 2                  # 定点求逆反传的 Neumann 截断阶数 (环境变量 FP_GRAD_ITERS)
+
+data:
+  source: official dataset_train (OBJ) -> tools/prepare_train_npy.py
+  points_per_model: 50000
+  heldout_list: tools/heldout_151.txt
+  noise: laplace, b ~ U[0.004, 0.017]
+  augment: [random_scale 0.8-1.2, random_rotation_xyz]
+
+train:
+  optimizer: adam
+  lr: 2.0e-4
+  batch_size: 4
+  num_patches: 1
+  clip_grad_norm: 1.0e-3
+  seed: 2023
+  loss:
+    emd_max_points: 512
+    emd_subset_mode: random
+    emd_subset_scale: inverse_fraction
+    w_cd: 40
+    w_rep: 40
+    r0: 0.05
+    w_sink: 40
+    sink_iters: 30
+    sink_eps: 0.005
+  stage1:                           # scripts/02_train_stage1.sh
+    epochs: 1-78
+    train_patch_size: 1024
+    emd_w: 0.10
+  stage2:                           # scripts/03_train_stage2_bigpatch.sh
+    epochs: 79-97
+    train_patch_size: 2048
+    emd_w: 0.05                     # patch 翻倍时 inverse_fraction 被动放大 EMD, 减半抵消
+
+swa:                                # scripts/04_swa_bnfix.sh
+  checkpoints: stage2 ep79-97 (19 点等权平均)
+  spectral_recalibrate: true
+  bn_recalibrate: {patch_size: 2048, batches: 120}
+  output: checkpoints/aboard_best_swa19_bnfix.pkl
+
+infer:                              # scripts/05_infer_test.sh
+  patch_size: 3072
+  seed_k: 6
+  niters: 2
+  jt_patch_step: 8
+  output_blend: none

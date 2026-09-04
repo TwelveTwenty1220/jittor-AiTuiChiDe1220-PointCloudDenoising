@@ -1,0 +1,8 @@
+# 赛道二 · 点云去噪 依赖清单
+# 目标环境(按组委会公告): Ubuntu 22.04 + CUDA 12.4 + Python 3.10 + Jittor 1.3.10
+# 说明: Jittor 按本机 CUDA JIT 编译, 兼容 CUDA 12.x; 本项目为纯 Jittor 实现,
+#       不依赖 JittorGeometric / Pandas / scikit-learn(公告所列为两赛道通用示例)。
+jittor==1.3.10.0
+numpy>=1.21,<2.0
+scipy>=1.7
+trimesh>=3.9
