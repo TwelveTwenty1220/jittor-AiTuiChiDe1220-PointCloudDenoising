@@ -19,6 +19,11 @@ from strict_jittor_io import load_jittor_state
 
 
 def valid_existing_output(path, noisy):
+    """判断已有输出文件是否有效(断点续跑时据此跳过)。
+
+    输入 path: denoised.npy 路径; noisy: np.ndarray (N, 3) 对应的输入点云。
+    返回 bool: 文件存在、shape 与 noisy 一致且 dtype 为 float32 时为 True。
+    """
     if not os.path.exists(path):
         return False
     try:
@@ -29,6 +34,10 @@ def valid_existing_output(path, noisy):
 
 
 def save_output_atomic(path, arr):
+    """原子写出 float32 npy: 先写 <path>.tmp.<pid> 并 fsync, 再 os.replace 覆盖目标。
+
+    输入 path: 目标 .npy 路径(父目录自动创建); arr: np.ndarray (N, 3)。无返回值。
+    """
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp_path = f"{path}.tmp.{os.getpid()}"
     with open(tmp_path, "wb") as f:
@@ -39,6 +48,13 @@ def save_output_atomic(path, arr):
 
 
 def main():
+    """命令行推理入口: 加载 ckpt, 遍历测试集 noisy.npy 逐个去噪并写出 denoised.npy。
+
+    关键参数: --ckpt 权重 .pkl; --data 测试集根目录; --base/--tag 输出根目录与子目录;
+    --patch_size/--seed_k/--niters 推理超参(含义见 denoise_loop); --start/--stride/--limit
+    对文件列表分片与截断(多卡并行)。输出 <base>/<tag>/shapenet/<syn>/<mid>/denoised.npy,
+    每个为 (N, 3) float32 且 N 与输入一致; 已有有效输出的模型直接跳过。
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument("--ckpt", required=True)
     parser.add_argument("--tag", default="strict_jt")

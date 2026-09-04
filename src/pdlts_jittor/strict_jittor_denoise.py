@@ -5,6 +5,12 @@ import jittor as jt
 
 
 def normalize_unit_sphere(pc):
+    """把点云平移到包围盒中心并缩放到单位球内。
+
+    输入 pc: jt.Var (N, 3)。
+    返回 (pc_norm, center, scale): pc_norm (N, 3) 单位球内坐标;
+    center (1, 3) 包围盒中心; scale 标量 Var, 去中心后的最大点半径。
+    """
     p_max = pc.max(dim=0, keepdims=True)
     p_min = pc.min(dim=0, keepdims=True)
     center = (p_max + p_min) / 2
@@ -14,6 +20,11 @@ def normalize_unit_sphere(pc):
 
 
 def farthest_point_sampling(pts, num):
+    """最远点采样(FPS), 起点固定为第 0 个点, 结果确定可复现。
+
+    输入 pts: jt.Var (N, 3); num: 采样点数。
+    返回 (sampled, idx): sampled (num, 3) 采样点坐标, idx (num,) int32 在 pts 中的索引。
+    """
     n_points = pts.shape[0]
     selected = []
     dist = jt.ones((n_points,)) * 1e10
@@ -28,6 +39,12 @@ def farthest_point_sampling(pts, num):
 
 
 def knn_patch(seed, pcl, k):
+    """以每个 seed 为中心从 pcl 中取 k 近邻构成 patch。
+
+    输入 seed: (S, 3) 种子点; pcl: (N, 3) 点云; k: 每个 patch 的点数。
+    返回 (dists, idx, nn): dists (S, k) 各邻居到 seed 的距离(升序, jt.misc.knn 口径);
+    idx (S, k) 邻居在 pcl 中的索引; nn (S, k, 3) patch 点坐标(仍在 pcl 的坐标系)。
+    """
     dists, idx = jt.misc.knn(seed.unsqueeze(0), pcl.unsqueeze(0), k)
     dists = dists[0]
     idx = idx[0]
@@ -36,6 +53,14 @@ def knn_patch(seed, pcl, k):
 
 
 def patch_denoise(model, pcl_noisy, patch_size=1024, seed_k=3, seed_k_alpha=5.0):
+    """单轮 patch 级去噪: FPS 选种子 -> KNN 取 patch -> 分批过模型 -> 按归属合并。
+
+    输入 model: 需提供 denoise((P, patch_size, 3)) -> (P, patch_size, 3);
+    pcl_noisy: jt.Var (N, 3) 单位球内噪声点云; patch_size: 每 patch 点数;
+    seed_k: 覆盖倍率(patch 数 = seed_k*N/patch_size); seed_k_alpha: 每批 patch 数 =
+    num_patches/seed_k_alpha(环境变量 JT_PATCH_STEP 可限上限; JT_SOFT_BETA 启用软融合)。
+    返回 jt.Var (N, 3) float32, 与输入逐点对应; 未被任何 patch 覆盖的点原样透传。
+    """
     n_points = pcl_noisy.shape[0]
     num_patches = int(seed_k * n_points / patch_size)
     seed_pts, _ = farthest_point_sampling(pcl_noisy, num_patches)
@@ -114,6 +139,13 @@ def patch_denoise(model, pcl_noisy, patch_size=1024, seed_k=3, seed_k_alpha=5.0)
 
 
 def denoise_loop(model, pcl_raw_np, patch_size=1024, seed_k=3, niters=1):
+    """完整推理入口: 归一化到单位球 -> 迭代 niters 轮 patch_denoise -> 还原原坐标。
+
+    输入 model: 去噪模型; pcl_raw_np: np.ndarray (N, 3) 原始坐标系噪声点云;
+    patch_size: patch 点数; seed_k: patch 覆盖倍率; niters: 去噪迭代轮数。
+    seed_k_alpha 自动取 max(1, N/10000) 以控制每批 patch 数(显存)。
+    返回 np.ndarray (N, 3) float32, 原始坐标系下的去噪结果, 点数与顺序同输入。
+    """
     pcl_raw = jt.array(pcl_raw_np.astype(np.float32))
     pcl_noisy, center, scale = normalize_unit_sphere(pcl_raw)
     seed_k_alpha = max(1.0, pcl_raw_np.shape[0] / 10000.0)

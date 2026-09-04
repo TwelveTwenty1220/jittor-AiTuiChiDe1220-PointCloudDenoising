@@ -9,8 +9,8 @@ where sigma is the stored `scale` buffer. We therefore load plain Linear layers
 with the baked weight computed at load time.
 
 Layer correspondence to the original repo:
-  - PreConv / EdgeConv / FeatMergeUnit / noiseEdgeConv : models/model_light/layer.py
-  - iMonotoneBlock (monotone residual flow) : models/layers/iMonotoneBlock.py
+  - PreConv / EdgeConv / FeatMergeUnit / NoiseEdgeConv : models/model_light/layer.py
+  - IMonotoneBlock (monotone residual flow) : models/layers/IMonotoneBlock.py
   - ActNorm : models/layers/normalize.py
   - InvertibleLinear : models/layers/glow.py  (unused in light cfg's chain)
   - Swish activation : models/layers/base/activations.py
@@ -68,6 +68,12 @@ class Swish(nn.Module):
 # ----------------------------------------------------------------------------
 # Feature extraction blocks (from layer.py)
 class PreConv(nn.Module):
+    """首层边卷积: 把原始坐标提升为逐点特征(对应原仓库 layer.py PreConv)。
+
+    参数 in_channel: 输入通道(xyz 为 3, 内部翻倍以拼接 [f, f_j - f]); out_channel: 输出通道。
+    execute(f, idx): f (B, N, C), idx (B, N, k) 近邻索引 -> (B, N, out_channel),
+    对 k 个邻居做 Conv2d+BN+LeakyReLU 后沿邻居维取 max。
+    """
     def __init__(self, in_channel, out_channel):
         super().__init__()
         in_channel = in_channel * 2
@@ -90,6 +96,13 @@ class PreConv(nn.Module):
 
 
 class EdgeConv(nn.Module):
+    """两层 1x1 卷积的 EdgeConv(对应原仓库 layer.py EdgeConv)。
+
+    参数 in_channel/hidden_channel/out_channel: 输入/隐层/输出通道;
+    concat=True 时把输入特征拼回输出(输出通道 = out_channel + in_channel),
+    concat=False 时隐层加宽 32 且输出通道 = out_channel。
+    execute(f, idx): f (B, N, C), idx (B, N, k) 近邻索引 -> (B, N, out_channel[+C])。
+    """
     def __init__(self, in_channel, hidden_channel, out_channel, concat=True):
         super().__init__()
         self.concat = concat
@@ -122,6 +135,11 @@ class EdgeConv(nn.Module):
 
 
 class FeatMergeUnit(nn.Module):
+    """两层 Conv1d+BN+ReLU 的逐点 MLP, 把特征变换到流的注入通道数。
+
+    参数 in_channel/hidden_channel/out_channel: 输入/隐层/输出通道。
+    execute(x): x (B, N, in_channel) -> (B, N, out_channel)。
+    """
     def __init__(self, in_channel, hidden_channel, out_channel):
         super().__init__()
         self.convs = nn.ModuleList()
@@ -144,7 +162,14 @@ class FeatMergeUnit(nn.Module):
         return x
 
 
-class noiseEdgeConv(nn.Module):
+class NoiseEdgeConv(nn.Module):
+    """噪声参数分支: 由局部邻域生成增广通道(对应原仓库 layer.py noiseEdgeConv)。
+
+    参数 in_channel: 输入通道(xyz 为 3); hidden_channel: 隐层宽度;
+    out_channel: 输出通道(= aug_channel)。
+    execute(f, idx): f (B, N, C), idx (B, N, k) 近邻索引 -> (B, N, out_channel),
+    邻域分支 [f_j, f_j - f] 经两层 Linear 后沿邻居维取 max, 再与逐点分支相加。
+    """
     def __init__(self, in_channel, hidden_channel, out_channel):
         super().__init__()
         self.linear1 = nn.Linear(in_channel * 2, hidden_channel)
@@ -231,7 +256,7 @@ def _banach_find_root(Gnet, x):
     return x_cur
 
 
-class iMonotoneBlock(nn.Module):
+class IMonotoneBlock(nn.Module):
     """Monotone residual flow (deterministic inference only).
 
     forward:  w = (Id+g)^{-1}(sqrt2*x);  y = sqrt2*w - x
@@ -244,6 +269,10 @@ class iMonotoneBlock(nn.Module):
         self.nnet = nnet
 
     def execute(self, x):
+        """前向映射 x -> y。输入 x: (B, N, C); 返回 y: (B, N, C)。
+
+        求解不动点 w = sqrt2*x - g(w)(固定 _FP_ITERS 次 Banach 迭代), 输出 y = sqrt2*w - x。
+        """
         s2 = math.sqrt(2)
         x0 = (s2 * x)
         # fixed point of  w = s2*x - g(w)  via find_fixed_point with y=s2*x, G=g
@@ -254,6 +283,10 @@ class iMonotoneBlock(nn.Module):
         return y
 
     def inverse(self, y):
+        """逆向映射 y -> x。输入 y: (B, N, C); 返回 x: (B, N, C)。
+
+        求解不动点 w = sqrt2*y + g(w), 输出 x = sqrt2*w - y, 与 execute 互为逆映射。
+        """
         s2 = math.sqrt(2)
         y0 = (s2 * y)
         # fixed point of  w = s2*y + g(w) = s2*y - (-g)(w)  -> G = -g
@@ -263,22 +296,24 @@ class iMonotoneBlock(nn.Module):
 
 
 class FlowAssembly(nn.Module):
-    """chain = [iMonotoneBlock, ActNorm, iMonotoneBlock(preact=True), ActNorm]."""
+    """chain = [IMonotoneBlock, ActNorm, IMonotoneBlock(preact=True), ActNorm]."""
     def __init__(self, channel, idim, nhidden):
         super().__init__()
         self.chain = nn.ModuleList([
-            iMonotoneBlock(FCNet(channel, idim, nhidden, preact=False)),
+            IMonotoneBlock(FCNet(channel, idim, nhidden, preact=False)),
             ActNorm(channel),
-            iMonotoneBlock(FCNet(channel, idim, nhidden, preact=True)),
+            IMonotoneBlock(FCNet(channel, idim, nhidden, preact=True)),
             ActNorm(channel),
         ])
 
     def execute(self, x):
+        """依次通过 chain 的 4 层(可逆前向)。输入 x: (B, N, C); 返回 (B, N, C)。"""
         for layer in self.chain:
             x = layer(x)
         return x
 
     def inverse(self, y):
+        """按 chain 逆序调用各层 inverse。输入 y: (B, N, C); 返回 x: (B, N, C)。"""
         for i in range(len(self.chain) - 1, -1, -1):
             y = self.chain[i].inverse(y)
         return y
@@ -340,7 +375,7 @@ class DenoiseFlow(nn.Module):
     """Single DenoiseFlow. Defaults to the *light* config from get_denoise_net
     (models/model_light/denoise.py). Pass a different config dict for heavy.
 
-    The flow layers (FlowAssembly/FCNet/iMonotoneBlock/ActNorm) are identical
+    The flow layers (FlowAssembly/FCNet/IMonotoneBlock/ActNorm) are identical
     across light/heavy; only the channel widths and injector schedule differ.
 
     ``use_long=True`` attaches the HybridPF long branch (LongEncoder + zero-init
@@ -371,7 +406,7 @@ class DenoiseFlow(nn.Module):
         concat_off = cfg["concat_off"]
         assert len(in_channelE) >= n_injector, "feat_cfg too short for n_injector"
 
-        self.noise_params = noiseEdgeConv(self.pc_channel, 32, self.aug_channel)
+        self.noise_params = NoiseEdgeConv(self.pc_channel, 32, self.aug_channel)
         self.PreConv = PreConv(self.pc_channel, 16)
         hidden_channel = feature_hidden
         self.feat_Conv = nn.ModuleList()
@@ -397,6 +432,12 @@ class DenoiseFlow(nn.Module):
                 self.long_proj.append(proj)
 
     def feat_extract(self, xyz):
+        """提取逐层注入特征。输入 xyz: (B, N, 3) patch 局部坐标。
+
+        返回 cs: 长度 n_injector 的列表, 每项 (B, N, pc_channel+aug_channel);
+        use_long=True 时返回 (cs, e_l, v), e_l (B, N, feature_hidden), v (B, N, 3)。
+        KNN 图(k=num_neighbors)只建一次并复用于全部 EdgeConv 层。
+        """
         idx = knn_idx(xyz, xyz, self.num_neighbors)
         f = self.PreConv(xyz, idx)
         cs = []
@@ -414,6 +455,7 @@ class DenoiseFlow(nn.Module):
         return [cs[i] + _LONG_TANH_SCALE * jt.tanh(self.long_proj[i](e_l)) for i in range(self.n_injector)]
 
     def unit_coupling(self, xyz):
+        """生成增广通道。输入 xyz: (B, N, 3); 返回 (B, N, aug_channel), 由 NoiseEdgeConv 计算。"""
         idx = knn_idx(xyz, xyz, self.num_neighbors)
         return self.noise_params(xyz, idx)
 
@@ -445,6 +487,10 @@ class DenoiseFlow(nn.Module):
         return full[..., :self.pc_channel]
 
     def denoise(self, noisy_pc):
+        """单个流的去噪接口。输入 noisy_pc: (B, N, 3) 局部坐标 patch; 返回同形状去噪坐标。
+
+        等价于 execute: 特征注入 -> 可逆前向 f -> 置零末 cut_channel 个通道 -> 逆向 g。
+        """
         return self.execute(noisy_pc)
 
 
@@ -482,4 +528,5 @@ class HeavyDenoiseFlow(nn.Module):
         return p
 
     def denoise(self, noisy_pc):
+        """三级流串联去噪。输入 noisy_pc: (B, N, 3); 返回 (B, N, 3), 依次经 flows[0..2]。"""
         return self.execute(noisy_pc)

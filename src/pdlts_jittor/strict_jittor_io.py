@@ -4,6 +4,10 @@ import jittor as jt
 
 
 def save_jittor_state(model, path):
+    """把模型 state_dict 保存为 Jittor .pkl 检查点(自动创建父目录)。
+
+    输入 model: jittor nn.Module; path: 输出文件路径。无返回值。
+    """
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     jt.save(model.state_dict(), path)
     print(f"[jt-ckpt] saved -> {path}", flush=True)
@@ -21,6 +25,14 @@ def _maybe_bake_spectral_weight(key, value, source, coeff):
 
 
 def load_jittor_state(model, path, verbose=False, bake_spectral=False, coeff=0.98):
+    """把 .pkl 检查点按键名加载进模型, 形状不一致时抛 ValueError。
+
+    输入 model: 目标 nn.Module; path: jt.save 保存的 .pkl 路径;
+    verbose: 打印 loaded/missing/extra 统计; bake_spectral: 对带 .scale 伴随缓冲的
+    谱归一化权重先烘焙 W/max(1, sigma/coeff) 再加载(推理用); coeff: 谱系数。
+    返回 (loaded, missing, extra): 三个键名列表, 分别为已加载 / 模型有而 ckpt 无 /
+    ckpt 有而模型无。
+    """
     source = jt.load(path)
     target = model.state_dict()
     loaded = []

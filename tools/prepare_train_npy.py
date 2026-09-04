@@ -28,6 +28,12 @@ import trimesh
 
 
 def sample_one(job):
+    """对单个网格做面积加权均匀表面采样并原子写出 npy(进程池工作函数)。
+
+    输入 job: (obj_path, out_path, n_points) 三元组。
+    成功返回 None 并把 (n_points, 3) float32 写到 out_path;
+    失败返回 (obj_path, 原因), 原因为 "no_faces"/"bad_sample" 或异常 repr。
+    """
     obj_path, out_path, n_points = job
     try:
         mesh = trimesh.load(obj_path, force="mesh", process=False)
@@ -46,6 +52,14 @@ def sample_one(job):
 
 
 def main():
+    """数据准备入口: 遍历官方 dataset_train 网格, 多进程采样为训练 npy。
+
+    关键参数: --dataset_train 官方训练集根目录; --out 输出根目录(即训练脚本 --data_root);
+    --points 每个点云采样点数(默认 50000); --split 输出 split 名; --heldout_list 排除清单
+    (每行 synset_id/model_id); --workers 进程数。
+    输出 <out>/OurShapeNet/pointclouds/<split>/50000_poisson/<syn>__<mid>.npy, 各为
+    (points, 3) float32; 已存在且形状正确的文件跳过, 失败网格在结束时列出。
+    """
     ap = argparse.ArgumentParser()
     ap.add_argument("--dataset_train", required=True,
                     help="官方训练集根目录(含 shapenet/<syn>/<mid>/models/model_normalized.obj)")

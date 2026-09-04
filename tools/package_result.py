@@ -19,6 +19,13 @@ import numpy as np
 
 
 def main():
+    """打包入口: 校验推理输出与测试集一一对应后写入提交 zip。
+
+    关键参数: --pred_dir 含 shapenet/<syn>/<mid>/denoised.npy 的推理输出目录;
+    --noisy_dir 官方测试集根目录; --out 输出 zip 路径(已存在则先删除)。
+    校验: 模型集合一致、每个 denoised (N, 3) 与对应 noisy 同形状、float32、无 NaN/Inf。
+    zip 内路径为 shapenet/<syn>/<mid>/denoised.npy(ZIP_STORED 不压缩), 打印平均位移。
+    """
     ap = argparse.ArgumentParser()
     ap.add_argument("--pred_dir", required=True, help="含 shapenet/<syn>/<mid>/denoised.npy")
     ap.add_argument("--noisy_dir", required=True, help="官方测试集根(含 shapenet/.../noisy.npy)")

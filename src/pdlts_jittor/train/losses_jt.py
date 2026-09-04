@@ -66,6 +66,10 @@ def infocd_unit_sphere(gen, ref, tau_half=0.5, lam=1e-7):
     d_ref = jt.sqrt(jt.maximum(d2.min(dim=1), jt.array(1e-9)))  # (B, Nref)
 
     def one_dir(d):
+        """单方向 InfoCD。输入 d: (B, N) 最近邻欧氏距离。
+
+        返回标量 mean(tau_half*d) + lam*mean_B(logsumexp_N(-tau_half*d))。
+        """
         main = (tau_half * d).mean()
         # stable logsumexp over the point dim
         m = (-tau_half * d).max(dim=1, keepdims=True)
@@ -164,4 +168,5 @@ def coverage_loss(clean, denoised):
 
 
 def nn_relu(x):
+    """逐元素 ReLU: max(x, 0)。输入 x: 任意形状 jt.Var; 返回同形状 Var。"""
     return jt.maximum(x, jt.zeros_like(x))

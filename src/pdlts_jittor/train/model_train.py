@@ -4,7 +4,7 @@ Reuses the (already numerically-verified) inference feature-extraction blocks
 from pdlts_jittor/pdlts_model.py and replaces the three training-sensitive parts:
 
   1. FCNet  : plain nn.Linear -> live InducedNormLinearJT (spectral norm).
-  2. iMonotoneBlock : detached banach fixed-point -> UNROLLED fixed-point so
+  2. IMonotoneBlock : detached banach fixed-point -> UNROLLED fixed-point so
      Jittor autodiff flows through to both the input and the FCNet parameters.
      (Mathematically equivalent to the implicit gradient at the fixed point.)
   3. ActNorm : add an `initialized` buffer (warm-start sets it to 1 so the
@@ -25,7 +25,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))  # pdlts_jittor/
 # reuse verified inference blocks
 from pdlts_model import (  # noqa: E402
-    _FEAT_CFG, knn_idx, Swish, PreConv, EdgeConv, FeatMergeUnit, noiseEdgeConv,
+    _FEAT_CFG, knn_idx, Swish, PreConv, EdgeConv, FeatMergeUnit, NoiseEdgeConv,
 )
 from spectral import InducedNormLinearJT  # noqa: E402
 
@@ -139,7 +139,7 @@ def _unrolled_find_root(Gnet, y):
     return x
 
 
-class iMonotoneBlock(nn.Module):
+class IMonotoneBlock(nn.Module):
     """Monotone residual flow (differentiable training version).
 
     forward:  solve w = s2*x - g(w);  y = s2*w - x
@@ -162,14 +162,14 @@ class iMonotoneBlock(nn.Module):
 
 # ---------------------------------------------------------------------------
 class FlowAssembly(nn.Module):
-    """chain = [iMonotoneBlock, ActNorm, iMonotoneBlock(preact=True), ActNorm]."""
+    """chain = [IMonotoneBlock, ActNorm, IMonotoneBlock(preact=True), ActNorm]."""
     def __init__(self, channel, idim, nhidden, coeff=0.98, sn_atol=1e-3, sn_rtol=1e-3):
         super().__init__()
         self.chain = nn.ModuleList([
-            iMonotoneBlock(FCNet(channel, idim, nhidden, preact=False, coeff=coeff,
+            IMonotoneBlock(FCNet(channel, idim, nhidden, preact=False, coeff=coeff,
                                  sn_atol=sn_atol, sn_rtol=sn_rtol)),
             ActNorm(channel),
-            iMonotoneBlock(FCNet(channel, idim, nhidden, preact=True, coeff=coeff,
+            IMonotoneBlock(FCNet(channel, idim, nhidden, preact=True, coeff=coeff,
                                  sn_atol=sn_atol, sn_rtol=sn_rtol)),
             ActNorm(channel),
         ])
@@ -253,7 +253,7 @@ class DenoiseFlowTrain(nn.Module):
         self.use_long = use_long
         channel = self.pc_channel + self.aug_channel  # 51
 
-        self.noise_params = noiseEdgeConv(self.pc_channel, 32, self.aug_channel)
+        self.noise_params = NoiseEdgeConv(self.pc_channel, 32, self.aug_channel)
         self.PreConv = PreConv(self.pc_channel, 16)
         cfg = _FEAT_CFG[feat_cfg]
         in_channelE = cfg["in_channelE"]
@@ -288,6 +288,12 @@ class DenoiseFlowTrain(nn.Module):
                 self.long_proj.append(proj)
 
     def feat_extract(self, xyz):
+        """提取逐层注入特征。输入 xyz: (B, N, 3) patch 局部坐标。
+
+        返回 cs: 长度 n_injector 的列表, 每项 (B, N, pc_channel+aug_channel);
+        use_long=True 时返回 (cs, e_l, v), e_l (B, N, feature_hidden), v (B, N, 3)。
+        KNN 图(k=num_neighbors)只建一次并复用于全部 EdgeConv 层。
+        """
         idx = knn_idx(xyz, xyz, self.num_neighbors)
         f = self.PreConv(xyz, idx)
         cs = []
@@ -342,11 +348,17 @@ class DenoiseFlowTrain(nn.Module):
         return den
 
     def denoise(self, noisy_pc):
+        """单流去噪接口。输入 noisy_pc: (B, N, 3); 返回 (B, N, 3) 去噪坐标(use_long 时丢弃 v)。"""
         out = self.execute(noisy_pc)
         return out[0] if self.use_long else out
 
 
 def build_heavy_flow_train(feature_hidden=64, use_long=False, long_k=None):
+    """构造 heavy 配置的单个可训练流(aug_channel=32, n_injector=10, cut_channel=16)。
+
+    输入 feature_hidden: EdgeConv 隐层宽度; use_long: 是否挂 HybridPF 长程分支;
+    long_k: 长程分支 KNN 的 k(None 则用 num_neighbors=32)。返回 DenoiseFlowTrain 实例。
+    """
     return DenoiseFlowTrain(aug_channel=32, n_injector=10, cut_channel=16,
                             nflow_module=10, num_neighbors=32, idim=64,
                             nhidden=2, feat_cfg="heavy", feature_hidden=feature_hidden,
@@ -377,6 +389,10 @@ class HeavyDenoiseFlowTrain(nn.Module):
         ])
 
     def execute(self, x):
+        """依次通过三个流。输入 x: (B, N, 3); 返回 outs: 3 个 (B, N, 3) 中间输出的列表。
+
+        use_long=True 时返回 (outs, v0), v0 (B, N, 3) 为 flows[0] 的长程速度分支输出。
+        """
         p = x
         outs = []
         v0 = None
@@ -393,6 +409,7 @@ class HeavyDenoiseFlowTrain(nn.Module):
         return outs
 
     def denoise(self, noisy_pc):
+        """三级串联去噪, 只返回末级输出。输入 noisy_pc: (B, N, 3); 返回 (B, N, 3)。"""
         out = self.execute(noisy_pc)
         outs = out[0] if self.use_long else out
         return outs[-1]

@@ -23,7 +23,7 @@ from strict_jittor_io import load_jittor_state, save_jittor_state
 
 
 def init_noise_edgeconv_linear5(model):
-    """Match the reference noiseEdgeConv.linear5 initialization."""
+    """Match the reference NoiseEdgeConv.linear5 initialization."""
     count = 0
     for module in model.modules():
         if all(hasattr(module, name) for name in ("linear1", "linear2", "linear3", "linear4", "linear5")):
@@ -35,6 +35,10 @@ def init_noise_edgeconv_linear5(model):
 
 
 def update_lipschitz(model):
+    """对模型中所有 InducedNormLinearJT 层做幂迭代, 刷新谱归一化的 u/v/scale 缓冲。
+
+    输入 model: nn.Module。返回 int: 被更新的谱归一化层数。每个优化步后调用一次。
+    """
     count = 0
     for module in model.modules():
         if isinstance(module, InducedNormLinearJT):
@@ -44,6 +48,12 @@ def update_lipschitz(model):
 
 
 def emd_subset_indices(num_points, max_points, mode="first"):
+    """生成 EMD 子采样索引, 用于限制 EMD(匈牙利匹配)的点数。
+
+    输入 num_points: patch 点数 M; max_points: 上限(<=0 或 >=M 时不子采样);
+    mode: "first"(前 max_points 个)/"even"(等间隔)/"random"(随机无放回, 升序)。
+    返回 np.ndarray (max_points,) int64 索引, 或 None 表示不做子采样。
+    """
     if max_points <= 0 or num_points <= max_points:
         return None
     if mode == "first":
@@ -56,12 +66,18 @@ def emd_subset_indices(num_points, max_points, mode="first"):
 
 
 def subset_for_emd(x, indices):
+    """按索引在点维取子集。输入 x: (B, M, 3); indices: (K,) 或 None。返回 (B, K, 3) 或原 x。"""
     if indices is None:
         return x
     return x[:, indices, :]
 
 
 def emd_subset_scale(num_points, indices, mode="none"):
+    """EMD 子采样后的损失缩放系数。
+
+    输入 num_points: 原点数 M; indices: 子采样索引或 None; mode: "none" 返回 1.0,
+    "inverse_fraction" 返回 M/len(indices) 以补偿点数减少。返回 float。
+    """
     if mode == "none" or indices is None:
         return 1.0
     if mode == "inverse_fraction":
@@ -70,10 +86,23 @@ def emd_subset_scale(num_points, indices, mode="none"):
 
 
 def build_emd_loss(workers=8, reorder_noisy=False):
+    """构造 EMD 损失。输入 workers: 匈牙利匹配进程数; reorder_noisy: 先把目标按噪声点重排。
+
+    返回 EMDLoss 实例, 调用 emd(pred (B,M,3), target (B,M,3), noisy (B,M,3)) -> 标量,
+    值为配对平方距离在 batch 与点上的总和, 梯度只回传到 pred。
+    """
     return EMDLoss(workers=workers, reorder_noisy=reorder_noisy)
 
 
 def main():
+    """严格 Jittor 训练入口: 读 npy patch 数据, 训练三级 HeavyDenoiseFlowTrain 并保存 ckpt。
+
+    关键参数: --data_root 训练 npy 根目录; --train_patch_size patch 点数 M; --batch_size B;
+    --noise_min/--noise_max 拉普拉斯噪声尺度区间; --lr 学习率; --emd_w/--w_cd/--w_rep 等
+    损失权重(--r0 为 repulsion 半径); --resume_jittor 起点 ckpt; --start_epoch 轮数偏移。
+    每步三级输出 denoised[i] (B, M, 3) 分别对中噪/小噪/干净目标算 EMD, 末级另加 CD 等项;
+    Adam + clip_grad_norm(1e-3) + update_lipschitz。输出 <out_dir>/<tag>-ep{N}.pkl。
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_root", required=True, help="tools/prepare_train_npy.py 生成的训练 npy 根目录")
     parser.add_argument("--train_list", default="", help="Optional newline-delimited .npy list for train subset.")

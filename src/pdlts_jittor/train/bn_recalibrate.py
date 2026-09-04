@@ -52,6 +52,14 @@ def reset_bn(model):
 
 
 def main():
+    """SWA ckpt 后处理入口: 用平均后的权重重算谱 scale, 并在训练数据上重估 BN 统计量。
+
+    关键参数: --ckpt 输入 .pkl; --out 输出 .pkl; --data_root 训练 npy 根目录;
+    --patch_size 重估用 patch 点数(默认 2048 对齐推理); --batch_size/--batches 前向批数;
+    --noise_min/--noise_max 噪声区间; --skip_spectral 跳过谱 scale 重算。
+    过程: momentum=1/(k+1) 的累积平均使 running_mean/var 等于各 batch 的无偏均值;
+    结束时打印统计量改动幅度并写出新 ckpt。
+    """
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", required=True)
     ap.add_argument("--out", required=True)

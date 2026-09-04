@@ -40,6 +40,14 @@ def _rot_matrix(axis, deg):
 
 
 class PairedPatchDataset(Dataset):
+    """按需生成(噪声, 干净)逐点配对 patch 的 Jittor Dataset(流程见模块说明)。
+
+    参数 root: 数据根目录, 读 <root>/<dataset>/pointclouds/<split>/<resolution>/*.npy;
+    patch_size: 每 patch 点数 M; num_patches: 每个点云每 epoch 采样的 patch 数;
+    noise_min/noise_max: 拉普拉斯噪声尺度区间; aug_rotate: 是否绕三轴随机旋转;
+    file_list: 可选文件清单(每行一个 .npy 路径, 相对路径按 pcl_dir 解析)。
+    __getitem__ 返回 (pat_noisy (M,3), pat_clean (M,3), seed (1,3), b, sc), 世界坐标系。
+    """
     def __init__(self, root, dataset="OurShapeNet", resolution="50000_poisson",
                  split="train", patch_size=1024, num_patches=50,
                  noise_min=0.004, noise_max=0.017, aug_rotate=True,
@@ -101,6 +109,11 @@ class PairedPatchDataset(Dataset):
                 np.float32(b), np.float32(sc))
 
     def collate_batch(self, batch):
+        """把 __getitem__ 的样本列表堆叠成 batch 字典。
+
+        输入 batch: 长度 B 的元组列表。返回 dict: pcl_noisy/pcl_clean (B, M, 3),
+        seed_pnts (B, 1, 3), pcl_std (B,) 噪声尺度 b, scale (B,) 随机缩放系数 sc。
+        """
         noisy = jt.stack([b[0] for b in batch], dim=0)  # (B,M,3)
         clean = jt.stack([b[1] for b in batch], dim=0)
         seed = jt.stack([b[2] for b in batch], dim=0)   # (B,1,3)

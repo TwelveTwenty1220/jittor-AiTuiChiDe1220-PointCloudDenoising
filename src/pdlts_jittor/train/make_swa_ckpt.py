@@ -10,6 +10,7 @@ import numpy as np
 
 
 def to_np(v):
+    """把 ckpt 中的值转成 numpy: ndarray 原样返回, 带 .numpy() 的(jt.Var)转换, 其余原样返回。"""
     if isinstance(v, np.ndarray):
         return v
     if hasattr(v, "numpy"):

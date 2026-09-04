@@ -24,6 +24,13 @@ def _l2_normalize(x, eps=1e-12):
 
 
 class InducedNormLinearJT(nn.Module):
+    """训练期"实时"谱归一化线性层(L2 诱导范数), 对应原仓库 InducedNormLinear。
+
+    参数 in_features/out_features: 输入/输出维; bias: 是否带偏置; coeff: Lipschitz 上限
+    系数(前向用 W/max(1, sigma/coeff)); n_iterations: 幂迭代次数(None 则按 atol/rtol
+    收敛判据, 上限 200 次); atol/rtol: 幂迭代收敛容差。
+    可学习 weight (out, in); 非梯度缓冲 u (out,), v (in,), scale (1,) 存最近一次 sigma。
+    """
     def __init__(self, in_features, out_features, bias=True, coeff=0.98,
                  domain=2, codomain=2, n_iterations=None, atol=None, rtol=None,
                  **unused):
@@ -56,6 +63,12 @@ class InducedNormLinearJT(nn.Module):
         self.scale = jt.zeros((1,)).stop_grad()
 
     def compute_weight(self, update=True, n_iterations=None):
+        """返回谱归一化后的权重 W / max(1, sigma/coeff), 形状 (out, in)。
+
+        输入 update: True 时先做幂迭代刷新 u/v 缓冲(无梯度), False 只用当前 u/v;
+        n_iterations: 覆盖本层默认迭代次数。sigma = u^T W v 对 W 保留梯度,
+        同时把 sigma 写入 scale 缓冲(推理端烘焙权重时读取)。
+        """
         u = self.u
         v = self.v
         weight = self.weight
@@ -97,6 +110,7 @@ class InducedNormLinearJT(nn.Module):
         return weight / factor
 
     def execute(self, x):
+        """线性变换 y = x @ W_norm^T + b。输入 x: (..., in_features); 返回 (..., out_features)。"""
         weight = self.compute_weight(update=False)
         # x: (..., in_features) -> (..., out_features)
         y = jt.matmul(x, weight.transpose(0, 1))
