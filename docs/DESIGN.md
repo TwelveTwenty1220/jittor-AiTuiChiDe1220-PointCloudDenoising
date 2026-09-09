@@ -15,8 +15,15 @@
 
 ## 2. 网络结构（`src/pdlts_jittor/pdlts_model.py`，纯 Jittor）
 
-- **特征提取**：EdgeConv 图卷积堆叠（KNN 图，消息 `[x_j, x_j−x_i]`，feature_hidden=64）。
-- **去噪主体**：谱归一化（induced-norm，Lipschitz 系数 0.98）线性层构成的可逆残差流块。去噪过程 = 隐空间变换后**定点迭代求逆**回坐标空间；谱归一化（`src/pdlts_jittor/train/spectral.py`，幂迭代维护）保证收缩性，是求逆收敛的前提。
+整体 = **3 个同构 DenoiseFlow 串联**（`HeavyDenoiseFlow`，权重不共享，合计 6 MB）。每个 DenoiseFlow 的实际配置为
+`aug_channel=32 / n_injector=10 / nflow_module=10 / cut_channel=16 / num_neighbors=32 / idim=64`，
+即隐空间维度 = 3（坐标）+ 32（增广）= **35**。
+
+- **条件分支（不可逆）**：KNN 图（k=32，整个 patch 只建一次）→ `PreConv`(3→16) → 10 层 `EdgeConv`（层间密集拼接，通道 16→48→…→168→96）→ 10 个 `FeatMergeUnit`(→35)，产出逐层注入特征 `c_0 … c_9`。该分支只提供条件，不参与可逆性。
+- **增广通道**：`NoiseEdgeConv`(3→32) 由邻域生成 32 维增广，与坐标拼接得到 `X⁽⁰⁾ ∈ ℝ^{N×35}`。3 维坐标本身不足以支撑有表达力的可逆变换。
+- **可逆主干**：10 个 `FlowAssembly`，每个 = `[MonotoneBlock, ActNorm, MonotoneBlock(preact), ActNorm]`。前向 `f`：逐层 `x ← x + c_i` 后过 FlowAssembly；逆向 `g`：逐层求逆后 `z ← z − c_i`（减去同一批注入，可逆性因此成立）。
+  MonotoneBlock 前向解 `w = √2·x − g(w)`、逆向解 `w = √2·y + g(w)`，均由 Banach 定点迭代求解（推理固定 12 次）；`g` 是谱归一化 MLP `35→64→64→35`（Swish），`Lip(g) ≤ 0.98 < 1` 由谱归一化（`src/pdlts_jittor/train/spectral.py`，幂迭代维护）保证，是定点迭代收敛的前提。
+- **去噪发生在隐空间**：前向得到 `z ∈ ℝ^{N×35}` 后，把**末 16 维（cut_channel）直接置零**，再用 `g` 精确逆回坐标空间，取前 3 维为去噪坐标。损失只约束最终坐标，没有任何一项直接监督 z 的通道分工；但由于末 16 维在推理时必被清零，网络只有把可恢复的几何放进前 19 维才能降低损失。**这也是主干必须严格可逆的原因**：普通编码器-解码器只能近似重建，误差会直接落到点的位置上。
 
 ## 3. 可逆求逆的反传设计：K=2 截断 Neumann
 
